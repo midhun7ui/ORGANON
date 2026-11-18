@@ -1,0 +1,12 @@
+services:
+  chroma:
+    image: chromadb/chroma:1.4.1
+    container_name: organon-chroma
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - chroma_data:/data
+    restart: unless-stopped
+
+volumes:
+  chroma_data:
