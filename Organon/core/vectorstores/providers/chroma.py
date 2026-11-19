@@ -8,11 +8,23 @@ from typing import Any
 
 import chromadb
 
+from core.exceptions import SecurityError
 from core.vectorstores.base import VectorStore, VectorSearchResult
+
+from core.vectorstores.validation import (
+    validate_upsert_inputs,
+    validate_search_inputs,
+)
 
 
 class ChromaVectorStore(VectorStore):
     """ChromaDB implementation of the ORGANON VectorStore interface."""
+
+    # Metadata fields reserved for internal ORGANON operations.
+    RESERVED_METADATA_FIELDS = {
+        "tenant_id",
+        "organon_document_id",
+    }
 
     def __init__(
         self,
@@ -31,6 +43,12 @@ class ChromaVectorStore(VectorStore):
         # Initialize client and collection as None.
         self.client = None
         self.collection = None
+
+    @staticmethod
+    def _make_internal_id(tenant_id: str, document_id: str) -> str:
+        """Create a unique ChromaDB ID for a tenant and document."""
+
+        return f"{len(tenant_id)}:{tenant_id}{document_id}"
 
     async def connect(self) -> None:
         """Connect to ChromaDB and initialize the collection."""
@@ -54,19 +72,67 @@ class ChromaVectorStore(VectorStore):
         vectors: list[list[float]],
         documents: list[str],
         metadatas: list[dict[str, Any]] | None = None,
+        *,
+        tenant_id: str,
     ) -> None:
-        """Insert new documents or update existing documents."""
+        """Insert or update documents within a specific tenant."""
 
-        # Ensure the provider is connected before performing operations.
+        # Ensure the provider is connected.
         if self.collection is None:
             raise RuntimeError("ChromaVectorStore is not connected.")
 
-        # Insert or update records in ChromaDB.
-        await self.collection.upsert(
+        # Reject missing tenant identity.
+        if not tenant_id or not tenant_id.strip():
+            raise ValueError("tenant_id cannot be empty.")
+
+        # Validate inputs before interacting with ChromaDB.
+        validate_upsert_inputs(
             ids=ids,
-            embeddings=vectors,
+            vectors=vectors,
             documents=documents,
             metadatas=metadatas,
+        )
+
+        # Prepare metadata for every document.
+        document_metadatas = metadatas if metadatas is not None else [{} for _ in ids]
+
+        # Prepare secured metadata for every document.
+        secured_metadatas = []
+
+        for metadata in document_metadatas:
+
+            # Identify fields reserved by ORGANON.
+            reserved_fields = self.RESERVED_METADATA_FIELDS.intersection(
+                metadata.keys()
+            )
+
+            # Reject caller-supplied internal metadata fields.
+            if reserved_fields:
+                raise SecurityError(
+                    f"Metadata contains reserved fields: {reserved_fields}"
+                )
+
+            # Copy developer-provided metadata.
+            secured_metadata = dict(metadata)
+
+            # Attach trusted tenant identity.
+            secured_metadata["tenant_id"] = tenant_id
+
+            secured_metadatas.append(secured_metadata)
+
+        # Generate tenant-specific internal IDs.
+        internal_ids = [self._make_internal_id(tenant_id, doc_id) for doc_id in ids]
+
+        # Preserve original document IDs in metadata.
+        for metadata, doc_id in zip(secured_metadatas, ids):
+            metadata["organon_document_id"] = doc_id
+
+        # Insert or update records in ChromaDB.
+        await self.collection.upsert(
+            ids=internal_ids,
+            embeddings=vectors,
+            documents=documents,
+            metadatas=secured_metadatas,
         )
 
     async def search(
@@ -74,18 +140,45 @@ class ChromaVectorStore(VectorStore):
         query_vector: list[float],
         top_k: int = 5,
         filters: dict[str, Any] | None = None,
+        *,
+        tenant_id: str,
     ) -> list[VectorSearchResult]:
-        """Search for similar documents in ChromaDB."""
+        """Search for documents belonging to a specific tenant."""
 
         # Ensure the provider is connected.
         if self.collection is None:
             raise RuntimeError("ChromaVectorStore is not connected.")
 
-        # Search ChromaDB using the supplied query vector.
+        # Reject missing tenant identity.
+        if not tenant_id or not tenant_id.strip():
+            raise ValueError("tenant_id cannot be empty.")
+
+        # Validate search inputs before querying ChromaDB.
+        validate_search_inputs(
+            query_vector=query_vector,
+            top_k=top_k,
+            filters=filters,
+        )
+
+        # Build a mandatory tenant filter.
+        tenant_filter = {"tenant_id": tenant_id}
+
+        # Combine tenant isolation with optional user filters.
+        if filters:
+            secured_filter = {
+                "$and": [
+                    tenant_filter,
+                    filters,
+                ]
+            }
+        else:
+            secured_filter = tenant_filter
+
+        # Search ChromaDB using the tenant-scoped filter.
         results = await self.collection.query(
             query_embeddings=[query_vector],
             n_results=top_k,
-            where=filters,
+            where=secured_filter,
         )
 
         # Extract results for our single query.
@@ -100,24 +193,46 @@ class ChromaVectorStore(VectorStore):
         for doc_id, document, metadata, distance in zip(
             ids, documents, metadatas, distances
         ):
+            metadata = metadata or {}
+
+            # Retrieve the original ORGANON document ID.
+            original_id = metadata["organon_document_id"]
+
+            # Remove internal ORGANON metadata before returning results.
+            metadata.pop("organon_document_id", None)
+
             search_results.append(
                 VectorSearchResult(
-                    id=doc_id,
+                    id=original_id,
                     document=document,
                     score=1.0 - distance,
-                    metadata=metadata or {},
+                    metadata=metadata,
                 )
             )
 
         return search_results
 
-    async def delete(self, ids: list[str]) -> None:
-        """Delete documents from ChromaDB using their IDs."""
+    async def delete(
+        self,
+        ids: list[str],
+        *,
+        tenant_id: str,
+    ) -> None:
+        """Delete documents only within the specified tenant."""
 
-        # Ensure the provider is connected before performing operations.
+        # Ensure the provider is connected.
         if self.collection is None:
             raise RuntimeError("ChromaVectorStore is not connected.")
 
-        # Delete the requested documents from ChromaDB.
-        await self.collection.delete(ids=ids)
+        # Reject missing tenant identity.
+        if not tenant_id or not tenant_id.strip():
+            raise ValueError("tenant_id cannot be empty.")
 
+        # Convert original IDs into tenant-specific internal IDs.
+        internal_ids = [self._make_internal_id(tenant_id, doc_id) for doc_id in ids]
+
+        # Delete only the specified tenant's documents.
+        await self.collection.delete(
+            ids=internal_ids,
+            where={"tenant_id": tenant_id},
+        )

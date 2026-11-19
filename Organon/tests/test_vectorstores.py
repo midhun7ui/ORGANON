@@ -34,6 +34,7 @@ class FakeVectorStore(VectorStore):
     async def delete(self, ids):
         pass
 
+
 class InMemoryVectorStore(VectorStore):
     """In-memory implementation for testing vector store operations."""
 
@@ -66,6 +67,7 @@ class InMemoryVectorStore(VectorStore):
         for doc_id in ids:
             self.records.pop(doc_id, None)
 
+
 def test_upsert_inserts_documents():
     store = InMemoryVectorStore()
 
@@ -80,6 +82,7 @@ def test_upsert_inserts_documents():
 
     assert "doc_001" in store.records
     assert store.records["doc_001"]["document"] == "ORGANON is a RAG framework."
+
 
 def test_upsert_updates_existing_document():
     store = InMemoryVectorStore()
@@ -106,6 +109,7 @@ def test_upsert_updates_existing_document():
     assert store.records["doc_001"]["vector"] == [0.4, 0.5, 0.6]
     assert store.records["doc_001"]["metadata"] == {"version": 2}
 
+
 def test_delete_documents():
     store = InMemoryVectorStore()
 
@@ -122,12 +126,14 @@ def test_delete_documents():
     assert "doc_001" not in store.records
     assert "doc_002" in store.records
 
+
 def test_delete_nonexistent_document():
     store = InMemoryVectorStore()
 
     asyncio.run(store.delete(["unknown_doc"]))
 
     assert "unknown_doc" not in store.records
+
 
 def test_cannot_instantiate_abstract_vector_store():
     with pytest.raises(TypeError):

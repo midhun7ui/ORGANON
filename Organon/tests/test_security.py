@@ -1,14 +1,24 @@
+
 import pytest
 
-from core.security.base import SecurityProvider, UserContext
+from core.security.base import (
+    AuthenticationProvider,
+    AuthorizationProvider,
+    UserContext,
+)
 
 
-def test_security_provider_is_abstract():
+# Verify that abstract security interfaces cannot be instantiated.
+def test_security_providers_are_abstract():
     with pytest.raises(TypeError):
-        SecurityProvider()
+        AuthenticationProvider()
+
+    with pytest.raises(TypeError):
+        AuthorizationProvider()
 
 
-class FakeSecurityProvider(SecurityProvider):
+# Fake authentication implementation for testing.
+class FakeAuthenticationProvider(AuthenticationProvider):
 
     async def authenticate(self, credentials):
         return UserContext(
@@ -17,13 +27,18 @@ class FakeSecurityProvider(SecurityProvider):
             permissions={"document:read"},
         )
 
+
+# Fake authorization implementation for testing.
+class FakeAuthorizationProvider(AuthorizationProvider):
+
     async def authorize(self, user, action):
         return action in user.permissions
 
 
+# Test authentication functionality.
 @pytest.mark.asyncio
-async def test_security_provider_authentication():
-    provider = FakeSecurityProvider()
+async def test_authentication_provider():
+    provider = FakeAuthenticationProvider()
 
     user = await provider.authenticate({})
 
@@ -33,9 +48,10 @@ async def test_security_provider_authentication():
     assert "document:read" in user.permissions
 
 
+# Test authorization functionality.
 @pytest.mark.asyncio
-async def test_security_provider_authorization():
-    provider = FakeSecurityProvider()
+async def test_authorization_provider():
+    provider = FakeAuthorizationProvider()
 
     user = UserContext(
         user_id="user-001",

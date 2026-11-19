@@ -29,6 +29,8 @@ class VectorStore(ABC):
         vectors: list[list[float]],
         documents: list[str],
         metadatas: list[dict[str, Any]] | None = None,
+        *,
+        tenant_id: str,
     ) -> None:
         """
         Insert new records or update existing records.
@@ -42,6 +44,8 @@ class VectorStore(ABC):
         query_vector: list[float],
         top_k: int = 5,
         filters: dict[str, Any] | None = None,
+        *,
+        tenant_id: str,
     ) -> list[VectorSearchResult]:
         """
         Search for the most relevant documents.
@@ -54,5 +58,7 @@ class VectorStore(ABC):
     async def delete(
         self,
         ids: list[str],
+        *,
+        tenant_id: str,
     ) -> None:
         """Delete documents using their IDs."""

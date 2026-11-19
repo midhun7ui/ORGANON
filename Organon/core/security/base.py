@@ -19,12 +19,16 @@ class UserContext:
     permissions: set[str] = field(default_factory=set)
 
 
-class SecurityProvider(ABC):
-    """Base interface for all ORGANON security providers."""
+class AuthenticationProvider(ABC):
+    """Base interface for all ORGANON authentication providers."""
 
     @abstractmethod
     async def authenticate(self, credentials: dict[str, Any]) -> UserContext:
         """Authenticate a requester and return their security context."""
+
+
+class AuthorizationProvider(ABC):
+    """Base interface for all ORGANON authorization providers."""
 
     @abstractmethod
     async def authorize(

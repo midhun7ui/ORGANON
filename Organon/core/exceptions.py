@@ -1,4 +1,3 @@
-# A centralized exception system so every ORGANON module reports errors consistently
 
 """
 ORGANON - Core Exception Handling
@@ -36,4 +35,16 @@ class GenerationError(OrganonError):
 
 
 class SecurityError(OrganonError):
-    """Raised when a security operation fails."""
+    """Base exception for all ORGANON security-related errors."""
+
+
+class AuthenticationError(SecurityError):
+    """Raised when a requester cannot be authenticated."""
+
+
+class AuthorizationError(SecurityError):
+    """Raised when a user is not authorized to perform an action."""
+
+
+class ValidationError(OrganonError):
+    """Raised when input data fails validation."""
