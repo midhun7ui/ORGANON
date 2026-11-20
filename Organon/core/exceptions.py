@@ -1,4 +1,3 @@
-
 """
 ORGANON - Core Exception Handling
 
@@ -46,5 +45,15 @@ class AuthorizationError(SecurityError):
     """Raised when a user is not authorized to perform an action."""
 
 
-class ValidationError(OrganonError):
+class ValidationError(OrganonError, ValueError):
     """Raised when input data fails validation."""
+
+
+class DocumentAlreadyExistsError(OrganonError):
+    """Raised when a document already exists within a tenant."""
+
+class DocumentNotFoundError(OrganonError):
+    """Raised when a requested document does not exist."""
+
+class InvalidVersionStateError(OrganonError):
+    """Raised when a document version cannot transition to the requested state."""

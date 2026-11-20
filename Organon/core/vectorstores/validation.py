@@ -5,6 +5,7 @@ Provides shared validation for vector store operations.
 """
 
 import math
+from core.validation import validate_metadata
 
 
 def validate_upsert_inputs(
@@ -81,6 +82,8 @@ def validate_upsert_inputs(
                     continue
 
                 raise ValueError(f"Unsupported metadata value type for key '{key}'.")
+
+    validate_metadata(metadatas)
 
 
 def validate_search_inputs(

@@ -1,0 +1,14 @@
+# ORGANON Configuration
+
+vector_store:
+  provider: chroma
+  config:
+    host: localhost
+    port: 8000
+    collection_name: organon
+
+embedding:
+  provider: sentence_transformers
+  config:
+    model_name: sentence-transformers/all-MiniLM-L6-v2
+    device: cpu

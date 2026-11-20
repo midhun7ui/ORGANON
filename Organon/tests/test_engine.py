@@ -5,6 +5,7 @@ import pytest
 from core.engine.engine import OrganonEngine
 from core.engine.security_context import SecurityContext
 from core.exceptions import AuthorizationError
+from core.exceptions import ValidationError
 
 
 @pytest.mark.asyncio
@@ -187,3 +188,112 @@ async def test_retrieve_documents_rejects_unauthorized_user():
 
     # Ensure embeddings are never generated.
     embedding_provider.embed_query.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_store_documents_rejects_empty_documents_before_embedding():
+
+    security_context = SecurityContext(
+        user_id="user-001",
+        tenant_id="tenant-A",
+        permissions=frozenset({"document:write"}),
+    )
+
+    security_manager = AsyncMock()
+    security_manager.authorize.return_value = security_context
+
+    vector_store = AsyncMock()
+    embedding_provider = AsyncMock()
+
+    engine = OrganonEngine(
+        security_manager=security_manager,
+        vector_store=vector_store,
+        embedding_provider=embedding_provider,
+    )
+
+    with pytest.raises(ValidationError):
+        await engine.store_documents(
+            credentials={"token": "test-token"},
+            ids=[],
+            documents=[],
+        )
+
+    # Embedding generation must never happen.
+    embedding_provider.embed_documents.assert_not_awaited()
+
+    # Vector store must never be called.
+    vector_store.upsert.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "query, top_k",
+    [
+        ("", 5),
+        ("   ", 5),
+        ("What is ORGANON?", 0),
+        ("What is ORGANON?", -1),
+        ("What is ORGANON?", True),
+    ],
+)
+async def test_retrieve_documents_rejects_invalid_inputs_before_embedding(
+    query,
+    top_k,
+):
+    security_context = SecurityContext(
+        user_id="user-001",
+        tenant_id="tenant-A",
+        permissions=frozenset({"document:read"}),
+    )
+
+    security_manager = AsyncMock()
+    security_manager.authorize.return_value = security_context
+
+    vector_store = AsyncMock()
+    embedding_provider = AsyncMock()
+
+    engine = OrganonEngine(
+        security_manager=security_manager,
+        vector_store=vector_store,
+        embedding_provider=embedding_provider,
+    )
+
+    with pytest.raises(ValidationError):
+        await engine.retrieve_documents(
+            credentials={"token": "test-token"},
+            query=query,
+            top_k=top_k,
+        )
+
+    embedding_provider.embed_query.assert_not_awaited()
+    vector_store.search.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_store_documents_rejects_invalid_metadata_before_embedding():
+    security_manager = AsyncMock()
+    security_manager.authorize.return_value = SecurityContext(
+        user_id="user-1",
+        tenant_id="tenant-1",
+        permissions=frozenset({"document:write"}),
+    )
+
+    embedding_provider = AsyncMock()
+    vector_store = AsyncMock()
+
+    engine = OrganonEngine(
+        security_manager=security_manager,
+        vector_store=vector_store,
+        embedding_provider=embedding_provider,
+    )
+
+    with pytest.raises(ValidationError):
+        await engine.store_documents(
+            credentials={"token": "valid"},
+            ids=["doc-1"],
+            documents=["ORGANON is a modular RAG framework."],
+            metadatas=[{"tags": ["Python", "AI"]}],
+        )
+
+    embedding_provider.embed_documents.assert_not_awaited()
+    vector_store.upsert.assert_not_awaited()

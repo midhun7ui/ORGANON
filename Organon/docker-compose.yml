@@ -1,3 +1,4 @@
+
 services:
   chroma:
     image: chromadb/chroma:1.4.1
@@ -8,5 +9,24 @@ services:
       - chroma_data:/data
     restart: unless-stopped
 
+  postgres:
+    image: postgres:17
+    container_name: organon-postgres
+    environment:
+      POSTGRES_USER: organon
+      POSTGRES_PASSWORD: ${ORGANON_DB_PASSWORD:?Set ORGANON_DB_PASSWORD first}
+      POSTGRES_DB: organon
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U organon -d organon"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
 volumes:
   chroma_data:
+  postgres_data:

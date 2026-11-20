@@ -3,6 +3,7 @@ import pytest
 import pytest_asyncio
 from core.exceptions import SecurityError
 from core.vectorstores.providers.chroma import ChromaVectorStore
+from core.exceptions import ConfigurationError
 
 
 @pytest_asyncio.fixture
@@ -315,3 +316,85 @@ async def test_chroma_accepts_custom_metadata(chroma_store):
     assert len(results) > 0
     assert results[0].metadata["category"] == "research"
     assert results[0].metadata["tenant_id"] == "tenant-A"
+
+def test_chroma_rejects_invalid_port():
+    with pytest.raises(ConfigurationError):
+        ChromaVectorStore(
+            host="localhost",
+            port=70000,
+            collection_name="organon_test",
+        )
+
+def test_chroma_rejects_invalid_host():
+    with pytest.raises(ConfigurationError):
+        ChromaVectorStore(
+            host="",
+            port=8000,
+            collection_name="organon_test",
+        )
+
+def test_chroma_rejects_whitespace_host():
+    with pytest.raises(ConfigurationError):
+        ChromaVectorStore(
+            host="   ",
+            port=8000,
+            collection_name="organon_test",
+        )
+
+def test_chroma_rejects_invalid_collection_name():
+    with pytest.raises(ConfigurationError):
+        ChromaVectorStore(
+            host="localhost",
+            port=8000,
+            collection_name="   ",
+        )
+
+def test_chroma_rejects_boolean_port():
+    with pytest.raises(ConfigurationError):
+        ChromaVectorStore(
+            host="localhost",
+            port=True,
+            collection_name="organon_test",
+        )
+
+def test_chroma_rejects_string_port():
+    with pytest.raises(ConfigurationError):
+        ChromaVectorStore(
+            host="localhost",
+            port="8000",
+            collection_name="organon_test",
+        )
+
+def test_chroma_rejects_zero_port():
+    with pytest.raises(ConfigurationError):
+        ChromaVectorStore(
+            host="localhost",
+            port=0,
+            collection_name="organon_test",
+        )
+
+def test_chroma_accepts_maximum_valid_port():
+    store = ChromaVectorStore(
+        host="localhost",
+        port=65535,
+        collection_name="organon_test",
+    )
+
+    assert store.port == 65535
+
+def test_chroma_accepts_minimum_valid_port():
+    store = ChromaVectorStore(
+        host="localhost",
+        port=1,
+        collection_name="organon_test",
+    )
+
+    assert store.port == 1
+
+def test_chroma_rejects_port_above_maximum():
+    with pytest.raises(ConfigurationError):
+        ChromaVectorStore(
+            host="localhost",
+            port=65536,
+            collection_name="organon_test",
+        )

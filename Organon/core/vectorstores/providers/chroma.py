@@ -10,6 +10,7 @@ import chromadb
 
 from core.exceptions import SecurityError
 from core.vectorstores.base import VectorStore, VectorSearchResult
+from core.exceptions import ConfigurationError
 
 from core.vectorstores.validation import (
     validate_upsert_inputs,
@@ -32,6 +33,23 @@ class ChromaVectorStore(VectorStore):
         port: int = 8000,
         collection_name: str = "organon",
     ) -> None:
+
+        # Validate host.
+        if not isinstance(host, str) or not host.strip():
+            raise ConfigurationError("ChromaDB host must be a non-empty string.")
+
+        # Validate port.
+        if isinstance(port, bool) or not isinstance(port, int):
+            raise ConfigurationError("ChromaDB port must be an integer.")
+
+        if not 1 <= port <= 65535:
+            raise ConfigurationError("ChromaDB port must be between 1 and 65535.")
+
+        # Validate collection name.
+        if not isinstance(collection_name, str) or not collection_name.strip():
+            raise ConfigurationError(
+                "ChromaDB collection name must be a non-empty string."
+            )
 
         # Store connection configuration.
         self.host = host

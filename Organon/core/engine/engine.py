@@ -1,8 +1,9 @@
 from typing import Any
 
-from core.security.manager import SecurityManager
-from core.vectorstores.base import VectorStore, VectorSearchResult
 from core.embeddings.base import EmbeddingProvider
+from core.security.manager import SecurityManager
+from core.validation import validate_document_inputs, validate_query_input
+from core.vectorstores.base import VectorStore, VectorSearchResult
 
 
 class OrganonEngine:
@@ -32,6 +33,14 @@ class OrganonEngine:
             credentials=credentials,
             action="document:write",
         )
+
+        # Validate document inputs before generating embeddings.
+        validate_document_inputs(
+            ids=ids,
+            documents=documents,
+            metadatas=metadatas,
+        )
+
         # Generate embeddings for the documents.
         vectors = await self.embedding_provider.embed_documents(documents)
 
@@ -58,6 +67,13 @@ class OrganonEngine:
         security_context = await self.security_manager.authorize(
             credentials=credentials,
             action="document:read",
+        )
+
+        # Validate retrieval inputs before generating embeddings.
+        validate_query_input(
+            query=query,
+            top_k=top_k,
+            filters=filters,
         )
 
         # Generate an embedding for the user's query.

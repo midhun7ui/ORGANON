@@ -10,6 +10,14 @@ from abc import ABC, abstractmethod
 class EmbeddingProvider(ABC):
     """Abstract interface for embedding providers."""
 
+    async def connect(self) -> None:
+        """Initialize provider resources when required."""
+        pass
+
+    async def close(self) -> None:
+        """Release provider resources when required."""
+        pass
+
     @abstractmethod
     async def embed_documents(
         self,
