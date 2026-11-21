@@ -8,7 +8,11 @@ from core.security.base import (
 )
 from core.security.manager import SecurityManager
 from core.engine.security_context import SecurityContext
-
+from core.security.rbac import (
+    Permission,
+    Role,
+    RoleBasedAuthorization,
+)
 
 # Fake authentication provider for testing.
 class FakeAuthenticationProvider(AuthenticationProvider):
@@ -82,4 +86,80 @@ async def test_security_manager_rejects_invalid_credentials():
         await manager.authorize(
             credentials={"token": "invalid-token"},
             action="document:read",
+        )
+@pytest.mark.asyncio
+async def test_security_manager_works_with_rbac():
+
+    user = UserContext(
+        user_id="user-002",
+        tenant_id="tenant-002",
+        roles={"admin"},
+    )
+
+    class RBACAuthenticationProvider(AuthenticationProvider):
+
+        async def authenticate(self, credentials):
+            return user
+
+    authorization = RoleBasedAuthorization(
+        roles={
+            "admin": Role(
+                name="admin",
+                permissions=frozenset({
+                    Permission("document:read"),
+                    Permission("document:write"),
+                }),
+            )
+        }
+    )
+
+    manager = SecurityManager(
+        authentication=RBACAuthenticationProvider(),
+        authorization=authorization,
+    )
+
+    context = await manager.authorize(
+        credentials={"token": "valid-token"},
+        action="document:write",
+    )
+
+    assert context.user_id == "user-002"
+    assert context.tenant_id == "tenant-002"
+    assert context.roles == frozenset({"admin"})
+
+
+@pytest.mark.asyncio
+async def test_security_manager_rejects_rbac_user_without_permission():
+
+    user = UserContext(
+        user_id="user-003",
+        tenant_id="tenant-002",
+        roles={"viewer"},
+    )
+
+    class RBACAuthenticationProvider(AuthenticationProvider):
+
+        async def authenticate(self, credentials):
+            return user
+
+    authorization = RoleBasedAuthorization(
+        roles={
+            "viewer": Role(
+                name="viewer",
+                permissions=frozenset({
+                    Permission("document:read"),
+                }),
+            )
+        }
+    )
+
+    manager = SecurityManager(
+        authentication=RBACAuthenticationProvider(),
+        authorization=authorization,
+    )
+
+    with pytest.raises(AuthorizationError):
+        await manager.authorize(
+            credentials={"token": "valid-token"},
+            action="document:write",
         )

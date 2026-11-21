@@ -17,6 +17,7 @@ class UserContext:
     user_id: str
     tenant_id: str
     permissions: set[str] = field(default_factory=set)
+    roles: set[str] = field(default_factory=set)
 
 
 class AuthenticationProvider(ABC):

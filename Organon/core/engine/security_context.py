@@ -18,6 +18,7 @@ class SecurityContext:
     user_id: str
     tenant_id: str
     permissions: frozenset[str]
+    roles: frozenset[str] = frozenset()
 
     @classmethod
     def from_user(cls, user: UserContext) -> "SecurityContext":
@@ -27,4 +28,6 @@ class SecurityContext:
             user_id=user.user_id,
             tenant_id=user.tenant_id,
             permissions=frozenset(user.permissions),
+            roles=frozenset(user.roles),
         )
+    
