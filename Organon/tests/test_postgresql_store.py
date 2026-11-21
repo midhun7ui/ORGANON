@@ -1,11 +1,10 @@
-
 import os
 import uuid
 
 import pytest
 from sqlalchemy import delete
-
-from core.documents.models import DocumentRecord
+import asyncio
+from core.documents.models import DocumentRecord, VersionStatus
 from core.metadata.providers.postgresql.database import PostgreSQLDatabase
 from core.metadata.providers.postgresql.models import DocumentORM
 from core.metadata.providers.postgresql.store import PostgreSQLMetadataStore
@@ -107,9 +106,7 @@ async def test_get_version(metadata_store):
     store, tenant_id, document_id = metadata_store
 
     # Create a document.
-    await store.create_document(
-        DocumentRecord(id=document_id, tenant_id=tenant_id)
-    )
+    await store.create_document(DocumentRecord(id=document_id, tenant_id=tenant_id))
 
     # Create a version.
     version = await store.create_version(
@@ -135,9 +132,7 @@ async def test_list_versions(metadata_store):
     store, tenant_id, document_id = metadata_store
 
     # Create a document.
-    await store.create_document(
-        DocumentRecord(id=document_id, tenant_id=tenant_id)
-    )
+    await store.create_document(DocumentRecord(id=document_id, tenant_id=tenant_id))
 
     # Create three versions.
     for _ in range(3):
@@ -163,9 +158,7 @@ async def test_mark_version_ready(metadata_store):
     store, tenant_id, document_id = metadata_store
 
     # Create a document.
-    await store.create_document(
-        DocumentRecord(id=document_id, tenant_id=tenant_id)
-    )
+    await store.create_document(DocumentRecord(id=document_id, tenant_id=tenant_id))
 
     # Create a version in PROCESSING state.
     version = await store.create_version(
@@ -191,9 +184,7 @@ async def test_activate_version(metadata_store):
     store, tenant_id, document_id = metadata_store
 
     # Create a document.
-    await store.create_document(
-        DocumentRecord(id=document_id, tenant_id=tenant_id)
-    )
+    await store.create_document(DocumentRecord(id=document_id, tenant_id=tenant_id))
 
     # Create and prepare the first version.
     first_version = await store.create_version(
@@ -268,9 +259,7 @@ async def test_mark_version_failed(metadata_store):
     store, tenant_id, document_id = metadata_store
 
     # Create a document.
-    await store.create_document(
-        DocumentRecord(id=document_id, tenant_id=tenant_id)
-    )
+    await store.create_document(DocumentRecord(id=document_id, tenant_id=tenant_id))
 
     # Create a version.
     version = await store.create_version(
@@ -295,3 +284,102 @@ async def test_mark_version_failed(metadata_store):
     )
 
     assert document.current_version_id is None
+
+
+@pytest.mark.asyncio
+async def test_concurrent_version_creation(metadata_store):
+    store, tenant_id, document_id = metadata_store
+
+    # Create the parent document.
+    await store.create_document(DocumentRecord(id=document_id, tenant_id=tenant_id))
+
+    # Create 10 versions concurrently.
+    versions = await asyncio.gather(
+        *[
+            store.create_version(
+                document_id=document_id,
+                tenant_id=tenant_id,
+            )
+            for _ in range(10)
+        ]
+    )
+
+    # Extract and sort the generated version numbers.
+    version_numbers = sorted(version.version_number for version in versions)
+
+    # Every version number must be unique and sequential.
+    assert version_numbers == list(range(1, 11))
+
+    # Every version must have a unique ID.
+    version_ids = [version.id for version in versions]
+    assert len(set(version_ids)) == 10
+
+
+@pytest.mark.asyncio
+async def test_concurrent_version_activation(metadata_store):
+    store, tenant_id, document_id = metadata_store
+
+    # Create a document.
+    await store.create_document(DocumentRecord(id=document_id, tenant_id=tenant_id))
+
+    # Create two versions.
+    version_1 = await store.create_version(
+        document_id=document_id,
+        tenant_id=tenant_id,
+    )
+
+    version_2 = await store.create_version(
+        document_id=document_id,
+        tenant_id=tenant_id,
+    )
+
+    # Both versions must be READY before activation.
+    await store.mark_version_ready(
+        document_id=document_id,
+        version_id=version_1.id,
+        tenant_id=tenant_id,
+    )
+
+    await store.mark_version_ready(
+        document_id=document_id,
+        version_id=version_2.id,
+        tenant_id=tenant_id,
+    )
+
+    # Attempt to activate both versions concurrently.
+    results = await asyncio.gather(
+        store.activate_version(
+            document_id=document_id,
+            version_id=version_1.id,
+            tenant_id=tenant_id,
+        ),
+        store.activate_version(
+            document_id=document_id,
+            version_id=version_2.id,
+            tenant_id=tenant_id,
+        ),
+    )
+
+    # Both activation operations should complete.
+    assert len(results) == 2
+
+    # Retrieve the final document and its versions.
+    document = await store.get_document(
+        document_id=document_id,
+        tenant_id=tenant_id,
+    )
+
+    versions = await store.list_versions(
+        document_id=document_id,
+        tenant_id=tenant_id,
+    )
+
+    active_versions = [
+        version for version in versions if version.status == VersionStatus.ACTIVE
+    ]
+
+    # Exactly one version must remain ACTIVE.
+    assert len(active_versions) == 1
+
+    # The document pointer must reference that active version.
+    assert document.current_version_id == active_versions[0].id

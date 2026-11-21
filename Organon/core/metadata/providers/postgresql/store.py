@@ -34,18 +34,16 @@ class PostgreSQLMetadataStore(MetadataStore):
     """PostgreSQL implementation of ORGANON's MetadataStore."""
 
     def __init__(self, database: PostgreSQLDatabase) -> None:
-        async def connect(self) -> None:
-            """Initialize the PostgreSQL metadata provider."""
-
-            await self.database.connect()
-
-        async def close(self) -> None:
-            """Release PostgreSQL database resources."""
-
-            await self.database.close()
-
         # Database manager handles connections and async sessions.
         self.database = database
+
+    async def connect(self) -> None:
+        """Initialize the PostgreSQL metadata provider."""
+        await self.database.connect()
+
+    async def close(self) -> None:
+        """Release PostgreSQL database resources."""
+        await self.database.close()
 
     # ---------------------------------------------------------
     # Internal mapping and validation helpers

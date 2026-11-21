@@ -22,6 +22,14 @@ class VectorSearchResult:
 class VectorStore(ABC):
     """Abstract interface for vector store providers."""
 
+    async def connect(self) -> None:
+        """Initialize vector store resources when required."""
+        pass
+
+    async def close(self) -> None:
+        """Release vector store resources when required."""
+        pass
+
     @abstractmethod
     async def upsert(
         self,

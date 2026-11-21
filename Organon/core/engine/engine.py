@@ -1,3 +1,4 @@
+import asyncio
 from typing import Any
 
 from core.embeddings.base import EmbeddingProvider
@@ -19,6 +20,108 @@ class OrganonEngine:
         self.vector_store = vector_store
         self.embedding_provider = embedding_provider
 
+        # Track the engine's connection state.
+        self._is_connected = False
+
+        # Track providers that still need cleanup.
+        self._providers_to_close = []
+
+        # Prevent concurrent lifecycle operations.
+        self._lifecycle_lock = asyncio.Lock()
+
+    async def connect(self) -> None:
+        """Initialize all providers required by the engine."""
+
+        async with self._lifecycle_lock:
+
+            # Avoid connecting providers more than once.
+            if self._is_connected:
+                return
+
+            # Prevent startup while previous cleanup is incomplete.
+            if self._providers_to_close:
+                raise RuntimeError(
+                    "Cannot connect while provider cleanup is pending. "
+                    "Call close() first."
+                )
+
+            attempted_providers = []
+
+            try:
+                # Initialize the vector store first.
+                attempted_providers.append(self.vector_store)
+                await self.vector_store.connect()
+
+                # Initialize the embedding provider next.
+                attempted_providers.append(self.embedding_provider)
+                await self.embedding_provider.connect()
+
+                # Track providers in reverse initialization order.
+                self._providers_to_close = [
+                    self.embedding_provider,
+                    self.vector_store,
+                ]
+
+                self._is_connected = True
+
+            except BaseException as exc:
+
+                # Roll back all providers that were attempted.
+                for provider in reversed(attempted_providers):
+
+                    try:
+                        await provider.close()
+
+                    except BaseException as cleanup_error:
+
+                        # Preserve providers that still need cleanup.
+                        self._providers_to_close.append(provider)
+
+                        # Preserve the original startup exception.
+                        exc.add_note(f"Provider cleanup failed: {cleanup_error}")
+
+                self._is_connected = False
+
+                # Re-raise the original exception, including cancellation.
+                raise
+
+    async def close(self) -> None:
+        """Release all resources used by the engine."""
+
+        async with self._lifecycle_lock:
+
+            # Nothing to close if no providers need cleanup.
+            if not self._providers_to_close:
+                return
+
+            remaining_providers = []
+            errors = []
+
+            # Close providers in reverse initialization order.
+            for provider in self._providers_to_close:
+                try:
+                    await provider.close()
+
+                except Exception as exc:
+                    # Record the failure and retain the provider for retry.
+                    errors.append(exc)
+                    remaining_providers.append(provider)
+
+            # Keep only providers whose cleanup failed.
+            self._providers_to_close = remaining_providers
+
+            # The engine is disconnected after shutdown is attempted.
+            self._is_connected = False
+
+            # Report cleanup errors without hiding additional failures.
+            if errors:
+                first_error = errors[0]
+
+                for error in errors[1:]:
+                    first_error.add_note(f"Additional cleanup failure: {error}")
+
+                raise first_error
+
     async def store_documents(
         self,
         credentials: dict[str, Any],
@@ -34,7 +137,7 @@ class OrganonEngine:
             action="document:write",
         )
 
-        # Validate document inputs before generating embeddings.
+        # Validate inputs before generating embeddings.
         validate_document_inputs(
             ids=ids,
             documents=documents,
@@ -69,7 +172,7 @@ class OrganonEngine:
             action="document:read",
         )
 
-        # Validate retrieval inputs before generating embeddings.
+        # Validate inputs before generating embeddings.
         validate_query_input(
             query=query,
             top_k=top_k,
@@ -87,5 +190,5 @@ class OrganonEngine:
             tenant_id=security_context.tenant_id,
         )
 
-        # Return the retrieved documents.
         return results
+

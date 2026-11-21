@@ -91,3 +91,11 @@ class MetadataStore(ABC):
     ) -> DocumentVersion:
         """Mark a failed ingestion version as failed."""
         pass
+
+    async def connect(self) -> None:
+        """Initialize provider resources when required."""
+        pass
+
+    async def close(self) -> None:
+        """Release provider resources when required."""
+        pass

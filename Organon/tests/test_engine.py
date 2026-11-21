@@ -1,7 +1,7 @@
 from unittest.mock import AsyncMock
-
+import asyncio
 import pytest
-
+from unittest.mock import AsyncMock, Mock, call
 from core.engine.engine import OrganonEngine
 from core.engine.security_context import SecurityContext
 from core.exceptions import AuthorizationError
@@ -297,3 +297,463 @@ async def test_store_documents_rejects_invalid_metadata_before_embedding():
 
     embedding_provider.embed_documents.assert_not_awaited()
     vector_store.upsert.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_engine_connect_initializes_providers():
+
+    security_manager = AsyncMock()
+    vector_store = AsyncMock()
+    embedding_provider = AsyncMock()
+
+    engine = OrganonEngine(
+        security_manager=security_manager,
+        vector_store=vector_store,
+        embedding_provider=embedding_provider,
+    )
+
+    await engine.connect()
+
+    # Both providers should be initialized.
+    vector_store.connect.assert_awaited_once()
+    embedding_provider.connect.assert_awaited_once()
+
+    # Engine should now be connected.
+    assert engine._is_connected is True
+
+@pytest.mark.asyncio
+async def test_engine_connect_does_not_connect_providers_twice():
+
+    security_manager = AsyncMock()
+    vector_store = AsyncMock()
+    embedding_provider = AsyncMock()
+
+    engine = OrganonEngine(
+        security_manager=security_manager,
+        vector_store=vector_store,
+        embedding_provider=embedding_provider,
+    )
+
+    # First startup.
+    await engine.connect()
+
+    # Second startup.
+    await engine.connect()
+
+    # Providers should only connect once.
+    vector_store.connect.assert_awaited_once()
+    embedding_provider.connect.assert_awaited_once()
+
+    assert engine._is_connected is True
+
+@pytest.mark.asyncio
+async def test_engine_close_shuts_down_providers_in_reverse_order():
+
+    security_manager = AsyncMock()
+    vector_store = AsyncMock()
+    embedding_provider = AsyncMock()
+
+    engine = OrganonEngine(
+        security_manager=security_manager,
+        vector_store=vector_store,
+        embedding_provider=embedding_provider,
+    )
+
+    await engine.connect()
+
+    # Track the exact order of provider shutdown.
+    shutdown_order = Mock()
+    shutdown_order.attach_mock(
+        embedding_provider.close,
+        "embedding_close",
+    )
+    shutdown_order.attach_mock(
+        vector_store.close,
+        "vector_store_close",
+    )
+
+    await engine.close()
+
+    # Embeddings must close before the vector store.
+    assert shutdown_order.mock_calls == [
+        call.embedding_close(),
+        call.vector_store_close(),
+    ]
+
+    assert engine._is_connected is False
+
+@pytest.mark.asyncio
+async def test_engine_connect_rolls_back_when_embedding_provider_fails():
+
+    security_manager = AsyncMock()
+    vector_store = AsyncMock()
+    embedding_provider = AsyncMock()
+
+    # Simulate an embedding provider startup failure.
+    embedding_provider.connect.side_effect = RuntimeError(
+        "Embedding provider failed to initialize."
+    )
+
+    engine = OrganonEngine(
+        security_manager=security_manager,
+        vector_store=vector_store,
+        embedding_provider=embedding_provider,
+    )
+
+    # The original startup error should be preserved.
+    with pytest.raises(
+        RuntimeError,
+        match="Embedding provider failed to initialize.",
+    ):
+        await engine.connect()
+
+    # Both attempted providers should receive cleanup.
+    embedding_provider.close.assert_awaited_once()
+    vector_store.close.assert_awaited_once()
+
+    # The engine must not report itself as connected.
+    assert engine._is_connected is False
+
+@pytest.mark.asyncio
+async def test_engine_connect_preserves_startup_error_when_cleanup_fails():
+
+    security_manager = AsyncMock()
+    vector_store = AsyncMock()
+    embedding_provider = AsyncMock()
+
+    embedding_provider.connect.side_effect = RuntimeError(
+        "Embedding startup failed."
+    )
+
+    embedding_provider.close.side_effect = RuntimeError(
+        "Embedding cleanup failed."
+    )
+
+    engine = OrganonEngine(
+        security_manager=security_manager,
+        vector_store=vector_store,
+        embedding_provider=embedding_provider,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="Embedding startup failed.",
+    ) as exc_info:
+        await engine.connect()
+
+    # Vector store cleanup must still happen.
+    vector_store.close.assert_awaited_once()
+
+    # Engine must remain disconnected.
+    assert engine._is_connected is False
+
+    # Cleanup failure should be recorded as an exception note.
+    assert any(
+        "Embedding cleanup failed." in note
+        for note in exc_info.value.__notes__
+    )  
+
+@pytest.mark.asyncio
+async def test_engine_close_continues_when_provider_cleanup_fails():
+
+    security_manager = AsyncMock()
+    vector_store = AsyncMock()
+    embedding_provider = AsyncMock()
+
+    engine = OrganonEngine(
+        security_manager=security_manager,
+        vector_store=vector_store,
+        embedding_provider=embedding_provider,
+    )
+
+    await engine.connect()
+
+    # Simulate an embedding provider shutdown failure.
+    embedding_provider.close.side_effect = RuntimeError(
+        "Embedding shutdown failed."
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="Embedding shutdown failed.",
+    ):
+        await engine.close()
+
+    # Vector store must still be closed.
+    vector_store.close.assert_awaited_once()
+
+    # Engine must update its lifecycle state.
+    assert engine._is_connected is False
+
+
+@pytest.mark.asyncio
+async def test_engine_connect_handles_concurrent_calls():
+
+    security_manager = AsyncMock()
+    vector_store = AsyncMock()
+    embedding_provider = AsyncMock()
+
+    # Control when the vector store finishes connecting.
+    connection_started = asyncio.Event()
+    allow_connection = asyncio.Event()
+
+    async def delayed_connect():
+        connection_started.set()
+        await allow_connection.wait()
+
+    vector_store.connect.side_effect = delayed_connect
+
+    engine = OrganonEngine(
+        security_manager=security_manager,
+        vector_store=vector_store,
+        embedding_provider=embedding_provider,
+    )
+
+    # Start the first connection and wait until it enters the provider.
+    first_task = asyncio.create_task(engine.connect())
+    await connection_started.wait()
+
+    # Start another connection while the first is still running.
+    second_task = asyncio.create_task(engine.connect())
+
+    # Allow the first connection to finish.
+    allow_connection.set()
+
+    await asyncio.gather(first_task, second_task)
+
+    # Each provider should have connected exactly once.
+    vector_store.connect.assert_awaited_once()
+    embedding_provider.connect.assert_awaited_once()
+
+    assert engine._is_connected is True
+
+@pytest.mark.asyncio
+async def test_engine_close_handles_concurrent_calls():
+
+    security_manager = AsyncMock()
+    vector_store = AsyncMock()
+    embedding_provider = AsyncMock()
+
+    engine = OrganonEngine(
+        security_manager=security_manager,
+        vector_store=vector_store,
+        embedding_provider=embedding_provider,
+    )
+
+    await engine.connect()
+
+    # Pause the first provider shutdown.
+    shutdown_started = asyncio.Event()
+    allow_shutdown = asyncio.Event()
+
+    async def delayed_close():
+        shutdown_started.set()
+        await allow_shutdown.wait()
+
+    embedding_provider.close.side_effect = delayed_close
+
+    # Start the first shutdown.
+    first_task = asyncio.create_task(engine.close())
+    await shutdown_started.wait()
+
+    # Start another shutdown while the first is running.
+    second_task = asyncio.create_task(engine.close())
+
+    # Allow the first shutdown to finish.
+    allow_shutdown.set()
+
+    await asyncio.gather(first_task, second_task)
+
+    # Each provider should close exactly once.
+    embedding_provider.close.assert_awaited_once()
+    vector_store.close.assert_awaited_once()
+
+    assert engine._is_connected is False
+
+
+
+@pytest.mark.asyncio
+async def test_engine_connect_and_close_are_serialized():
+
+    security_manager = AsyncMock()
+    vector_store = AsyncMock()
+    embedding_provider = AsyncMock()
+
+    connection_started = asyncio.Event()
+    allow_connection = asyncio.Event()
+
+    async def delayed_connect():
+        connection_started.set()
+        await allow_connection.wait()
+
+    vector_store.connect.side_effect = delayed_connect
+
+    engine = OrganonEngine(
+        security_manager=security_manager,
+        vector_store=vector_store,
+        embedding_provider=embedding_provider,
+    )
+
+    # Start connection.
+    connect_task = asyncio.create_task(engine.connect())
+    await connection_started.wait()
+
+    # Request shutdown while connection is still running.
+    close_task = asyncio.create_task(engine.close())
+
+    # Allow initialization to finish.
+    allow_connection.set()
+
+    await asyncio.gather(connect_task, close_task)
+
+    vector_store.connect.assert_awaited_once()
+    embedding_provider.connect.assert_awaited_once()
+
+    embedding_provider.close.assert_awaited_once()
+    vector_store.close.assert_awaited_once()
+
+    assert engine._is_connected is False
+
+
+@pytest.mark.asyncio
+async def test_engine_close_retries_failed_provider_cleanup():
+
+    security_manager = AsyncMock()
+    vector_store = AsyncMock()
+    embedding_provider = AsyncMock()
+
+    engine = OrganonEngine(
+        security_manager=security_manager,
+        vector_store=vector_store,
+        embedding_provider=embedding_provider,
+    )
+
+    await engine.connect()
+
+    # First attempt fails; second attempt succeeds.
+    vector_store.close.side_effect = [
+        RuntimeError("Vector store cleanup failed"),
+        None,
+    ]
+
+    # First shutdown should report the failure.
+    with pytest.raises(
+        RuntimeError,
+        match="Vector store cleanup failed",
+    ):
+        await engine.close()
+
+    # Embedding provider closed successfully.
+    embedding_provider.close.assert_awaited_once()
+
+    # Vector store cleanup failed on the first attempt.
+    assert vector_store.close.await_count == 1
+
+    # Retry shutdown.
+    await engine.close()
+
+    # Embedding provider should not be closed again.
+    embedding_provider.close.assert_awaited_once()
+
+    # Vector store should have been retried.
+    assert vector_store.close.await_count == 2
+
+    assert engine._is_connected is False
+    assert engine._providers_to_close == []
+
+
+@pytest.mark.asyncio
+async def test_engine_connect_rolls_back_when_cancelled():
+
+    security_manager = AsyncMock()
+    vector_store = AsyncMock()
+    embedding_provider = AsyncMock()
+
+    connection_started = asyncio.Event()
+    allow_connection = asyncio.Event()
+
+    async def delayed_connect():
+        connection_started.set()
+        await allow_connection.wait()
+
+    embedding_provider.connect.side_effect = delayed_connect
+
+    engine = OrganonEngine(
+        security_manager=security_manager,
+        vector_store=vector_store,
+        embedding_provider=embedding_provider,
+    )
+
+    connect_task = asyncio.create_task(engine.connect())
+
+    await connection_started.wait()
+
+    # Cancel startup while the embedding provider is initializing.
+    connect_task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await connect_task
+
+    # Both attempted providers should receive cleanup.
+    embedding_provider.close.assert_awaited_once()
+    vector_store.close.assert_awaited_once()
+
+    assert engine._is_connected is False
+    assert engine._providers_to_close == []
+
+
+@pytest.mark.asyncio
+async def test_engine_connect_preserves_cancellation_when_cleanup_fails():
+
+    security_manager = AsyncMock()
+    vector_store = AsyncMock()
+    embedding_provider = AsyncMock()
+
+    connection_started = asyncio.Event()
+    allow_connection = asyncio.Event()
+
+    async def delayed_connect():
+        connection_started.set()
+        await allow_connection.wait()
+
+    embedding_provider.connect.side_effect = delayed_connect
+
+    # First cleanup fails; retry succeeds.
+    embedding_provider.close.side_effect = [
+        RuntimeError("Embedding cleanup failed"),
+        None,
+    ]
+
+    engine = OrganonEngine(
+        security_manager=security_manager,
+        vector_store=vector_store,
+        embedding_provider=embedding_provider,
+    )
+
+    connect_task = asyncio.create_task(engine.connect())
+
+    await connection_started.wait()
+
+    connect_task.cancel()
+
+    with pytest.raises(asyncio.CancelledError) as exc_info:
+        await connect_task
+
+    # Original cancellation must remain the raised exception.
+    assert isinstance(exc_info.value, asyncio.CancelledError)
+
+    # Both providers were given a cleanup attempt.
+    embedding_provider.close.assert_awaited_once()
+    vector_store.close.assert_awaited_once()
+
+    # Failed cleanup must be remembered.
+    assert engine._providers_to_close == [embedding_provider]
+
+    assert engine._is_connected is False
+
+    # Retry the failed cleanup.
+    await engine.close()
+
+    assert embedding_provider.close.await_count == 2
+    assert engine._providers_to_close == []
+    assert engine._is_connected is False
