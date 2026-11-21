@@ -29,11 +29,15 @@ class ProviderConfig:
 class OrganonConfig:
     """Main configuration for the ORGANON application."""
 
+    metadata_store: ProviderConfig
     vector_store: ProviderConfig
     embedding: ProviderConfig
 
     def validate(self) -> None:
         """Validate the complete ORGANON configuration."""
+
+        if not isinstance(self.metadata_store, ProviderConfig):
+            raise ValueError("Invalid metadata store configuration.")
 
         if not isinstance(self.vector_store, ProviderConfig):
             raise ValueError("Invalid vector store configuration.")
@@ -41,5 +45,6 @@ class OrganonConfig:
         if not isinstance(self.embedding, ProviderConfig):
             raise ValueError("Invalid embedding configuration.")
 
+        self.metadata_store.validate()
         self.vector_store.validate()
         self.embedding.validate()

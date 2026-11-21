@@ -1,10 +1,9 @@
+
 import pytest
 
-from core.config.loader import load_yaml
+from core.config.loader import load_yaml, parse_config, load_config
 from core.exceptions import ConfigurationError
-from core.config.loader import parse_config
 from core.config.schema import OrganonConfig, ProviderConfig
-from core.config.loader import load_config
 
 
 def test_load_valid_yaml(tmp_path):
@@ -12,6 +11,11 @@ def test_load_valid_yaml(tmp_path):
 
     config_file.write_text(
         """
+metadata_store:
+  provider: postgresql
+  config:
+    database_url: postgresql+asyncpg://localhost/organon
+
 vector_store:
   provider: chroma
   config:
@@ -23,6 +27,7 @@ vector_store:
 
     result = load_yaml(config_file)
 
+    assert result["metadata_store"]["provider"] == "postgresql"
     assert result["vector_store"]["provider"] == "chroma"
     assert result["vector_store"]["config"]["port"] == 8000
 
@@ -58,6 +63,10 @@ def test_load_yaml_with_non_dictionary_root(tmp_path):
 
 def test_parse_valid_config():
     data = {
+        "metadata_store": {
+            "provider": "postgresql",
+            "config": {"database_url": "postgresql+asyncpg://localhost/organon"},
+        },
         "vector_store": {
             "provider": "chroma",
             "config": {"host": "localhost", "port": 8000},
@@ -71,9 +80,11 @@ def test_parse_valid_config():
     result = parse_config(data)
 
     assert isinstance(result, OrganonConfig)
+    assert isinstance(result.metadata_store, ProviderConfig)
     assert isinstance(result.vector_store, ProviderConfig)
     assert isinstance(result.embedding, ProviderConfig)
 
+    assert result.metadata_store.provider == "postgresql"
     assert result.vector_store.provider == "chroma"
     assert result.embedding.provider == "sentence_transformers"
 
@@ -92,6 +103,10 @@ def test_parse_config_rejects_missing_section():
 
 def test_parse_config_rejects_invalid_provider():
     data = {
+        "metadata_store": {
+            "provider": "postgresql",
+            "config": {},
+        },
         "vector_store": {
             "provider": "",
             "config": {},
@@ -110,11 +125,17 @@ def test_parse_config_rejects_invalid_input():
     with pytest.raises(ConfigurationError):
         parse_config("invalid")
 
+
 def test_load_config_returns_organon_config(tmp_path):
     config_file = tmp_path / "config.yaml"
 
     config_file.write_text(
         """
+metadata_store:
+  provider: postgresql
+  config:
+    database_url: postgresql+asyncpg://localhost/organon
+
 vector_store:
   provider: chroma
   config:
@@ -132,5 +153,6 @@ embedding:
     config = load_config(config_file)
 
     assert isinstance(config, OrganonConfig)
+    assert config.metadata_store.provider == "postgresql"
     assert config.vector_store.provider == "chroma"
     assert config.embedding.provider == "sentence_transformers"

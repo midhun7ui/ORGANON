@@ -1,4 +1,3 @@
-
 """
 ORGANON - PostgreSQL Metadata Store
 
@@ -35,6 +34,16 @@ class PostgreSQLMetadataStore(MetadataStore):
     """PostgreSQL implementation of ORGANON's MetadataStore."""
 
     def __init__(self, database: PostgreSQLDatabase) -> None:
+        async def connect(self) -> None:
+            """Initialize the PostgreSQL metadata provider."""
+
+            await self.database.connect()
+
+        async def close(self) -> None:
+            """Release PostgreSQL database resources."""
+
+            await self.database.close()
+
         # Database manager handles connections and async sessions.
         self.database = database
 
@@ -83,9 +92,7 @@ class PostgreSQLMetadataStore(MetadataStore):
         try:
             return UUID(version_id)
         except (ValueError, TypeError, AttributeError) as exc:
-            raise ValidationError(
-                "Version ID must be a valid UUID."
-            ) from exc
+            raise ValidationError("Version ID must be a valid UUID.") from exc
 
     async def _get_locked_document(
         self,
@@ -113,9 +120,7 @@ class PostgreSQLMetadataStore(MetadataStore):
         document = result.scalar_one_or_none()
 
         if document is None:
-            raise DocumentNotFoundError(
-                f"Document '{document_id}' was not found."
-            )
+            raise DocumentNotFoundError(f"Document '{document_id}' was not found.")
 
         return document
 
@@ -147,9 +152,7 @@ class PostgreSQLMetadataStore(MetadataStore):
                     # Retrieve generated UUID and database timestamps.
                     await session.refresh(database_document)
 
-                    result = self._to_document_record(
-                        database_document
-                    )
+                    result = self._to_document_record(database_document)
 
         except IntegrityError as exc:
             # Translate only the document identity constraint violation.
@@ -218,13 +221,9 @@ class PostgreSQLMetadataStore(MetadataStore):
                 # Find the highest existing version number.
                 version_statement = select(
                     func.max(DocumentVersionORM.version_number)
-                ).where(
-                    DocumentVersionORM.document_id == document.id
-                )
+                ).where(DocumentVersionORM.document_id == document.id)
 
-                version_result = await session.execute(
-                    version_statement
-                )
+                version_result = await session.execute(version_statement)
                 latest_version = version_result.scalar_one()
 
                 next_version = (latest_version or 0) + 1
@@ -300,14 +299,8 @@ class PostgreSQLMetadataStore(MetadataStore):
         """List document versions using cursor-based pagination."""
 
         # Validate pagination inputs.
-        if (
-            isinstance(limit, bool)
-            or not isinstance(limit, int)
-            or limit <= 0
-        ):
-            raise ValidationError(
-                "Limit must be a positive integer."
-            )
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
+            raise ValidationError("Limit must be a positive integer.")
 
         if before_version_number is not None:
             if (
@@ -337,17 +330,12 @@ class PostgreSQLMetadataStore(MetadataStore):
         # Fetch only versions older than the supplied cursor.
         if before_version_number is not None:
             statement = statement.where(
-                DocumentVersionORM.version_number
-                < before_version_number
+                DocumentVersionORM.version_number < before_version_number
             )
 
         # Newest versions appear first.
-        statement = (
-            statement
-            .order_by(
-                desc(DocumentVersionORM.version_number)
-            )
-            .limit(limit)
+        statement = statement.order_by(desc(DocumentVersionORM.version_number)).limit(
+            limit
         )
 
         async with self.database.session() as session:
@@ -420,22 +408,17 @@ class PostgreSQLMetadataStore(MetadataStore):
                     select(DocumentVersionORM)
                     .where(
                         DocumentVersionORM.document_id == document.id,
-                        DocumentVersionORM.status
-                        == VersionStatus.ACTIVE.value,
+                        DocumentVersionORM.status == VersionStatus.ACTIVE.value,
                     )
                     .with_for_update()
                 )
 
-                result = await session.execute(
-                    previous_version_statement
-                )
+                result = await session.execute(previous_version_statement)
                 previous_version = result.scalar_one_or_none()
 
                 # 5. Archive the previous active version first.
                 if previous_version is not None:
-                    previous_version.status = (
-                        VersionStatus.ARCHIVED.value
-                    )
+                    previous_version.status = VersionStatus.ARCHIVED.value
 
                     # Flush the archive update before activating
                     # the new version to satisfy the unique index.

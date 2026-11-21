@@ -8,18 +8,28 @@ Handles application initialization and component lifecycle.
 import inspect
 from typing import Any
 
-from core.embeddings.registration import (
-    create_embedding_provider,
-    register_embedding_providers,
-)
-from core.engine.engine import OrganonEngine
+from core.config.schema import OrganonConfig
 from core.registry import Registry
 from core.security.manager import SecurityManager
+
+from core.engine.engine import OrganonEngine
+
+from core.metadata.base import MetadataStore
+from core.metadata.registration import (
+    create_metadata_store,
+    register_metadata_stores,
+)
+
 from core.vectorstores.registration import (
     create_vector_store,
     register_vector_stores,
 )
-from core.config.schema import OrganonConfig
+
+from core.embeddings.registration import (
+    create_embedding_provider,
+    register_embedding_providers,
+)
+
 from core.documents.registration import register_document_loaders
 from core.chunking.registration import register_chunkers
 
@@ -39,6 +49,9 @@ class Organon:
 
         # Engine will be created during initialization.
         self.engine: OrganonEngine | None = None
+
+        # Metadata store will be created during initialization.
+        self.metadata_store: MetadataStore | None = None
 
         # Track application lifecycle.
         self._initialized = False
@@ -90,15 +103,29 @@ class Organon:
             )
 
         try:
-            # Register available provider implementation
+            # Register available provider implementations.
+            register_metadata_stores(self.registry)
             register_vector_stores(self.registry)
             register_embedding_providers(self.registry)
+
+            # Register document loaders and chunkers.
             register_document_loaders(self.registry)
             register_chunkers(self.registry)
 
             # Read provider configurations.
+            metadata_store_config = self.config.metadata_store
             vector_store_config = self.config.vector_store
             embedding_config = self.config.embedding
+
+            # Create metadata store instance.
+            metadata_store = create_metadata_store(
+                registry=self.registry,
+                provider=metadata_store_config.provider,
+                config=metadata_store_config.config,
+            )
+
+            self._providers["metadata_store"] = metadata_store
+            self.metadata_store = metadata_store
 
             # Create vector store instance.
             vector_store = create_vector_store(
@@ -118,8 +145,12 @@ class Organon:
 
             self._providers["embedding"] = embedding_provider
 
+            # Connect to the metadata database.
+            await metadata_store.connect()
+
             # Connect to the vector database.
             await vector_store.connect()
+
             # Initialize the embedding provider.
             await embedding_provider.connect()
 
@@ -134,8 +165,9 @@ class Organon:
             self._initialized = True
 
         except Exception as exc:
-            # Reset engine if initialization fails.
+            # Reset application component references.
             self.engine = None
+            self.metadata_store = None
 
             # Attempt cleanup of all created providers.
             cleanup_errors = await self._cleanup_providers()
@@ -156,7 +188,9 @@ class Organon:
         if self._closed:
             return
 
+        # Release application component references.
         self.engine = None
+        self.metadata_store = None
 
         # Attempt to clean up all initialized providers.
         cleanup_errors = await self._cleanup_providers()

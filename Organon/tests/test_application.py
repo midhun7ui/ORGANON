@@ -1,3 +1,4 @@
+
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -15,6 +16,12 @@ def security_manager():
 @pytest.fixture
 def app_config():
     return OrganonConfig(
+        metadata_store=ProviderConfig(
+            provider="postgresql",
+            config={
+                "database_url": "postgresql+asyncpg://test:test@localhost:5432/test",
+            },
+        ),
         vector_store=ProviderConfig(
             provider="chroma",
             config={
@@ -35,6 +42,10 @@ def app_config():
 
 @pytest.fixture
 def mock_providers(monkeypatch):
+    metadata_store = MagicMock()
+    metadata_store.connect = AsyncMock()
+    metadata_store.close = AsyncMock()
+
     vector_store = MagicMock()
     vector_store.connect = AsyncMock()
     vector_store.close = AsyncMock()
@@ -42,6 +53,11 @@ def mock_providers(monkeypatch):
     embedding_provider = MagicMock()
     embedding_provider.connect = AsyncMock()
     embedding_provider.close = AsyncMock()
+
+    monkeypatch.setattr(
+        "core.application.create_metadata_store",
+        lambda **kwargs: metadata_store,
+    )
 
     monkeypatch.setattr(
         "core.application.create_vector_store",
@@ -53,11 +69,13 @@ def mock_providers(monkeypatch):
         lambda **kwargs: embedding_provider,
     )
 
-    return vector_store, embedding_provider
+    return vector_store, embedding_provider, metadata_store
 
 
 @pytest.mark.asyncio
-async def test_application_initialization(security_manager, app_config, mock_providers):
+async def test_application_initialization(
+    security_manager, app_config, mock_providers
+):
     app = Organon(
         config=app_config,
         security_manager=security_manager,
@@ -68,24 +86,39 @@ async def test_application_initialization(security_manager, app_config, mock_pro
     assert app._initialized is True
     assert app._closed is False
     assert app.engine is not None
+    assert app.metadata_store is mock_providers[2]
+
+    mock_providers[2].connect.assert_awaited_once()
+    mock_providers[0].connect.assert_awaited_once()
+    mock_providers[1].connect.assert_awaited_once()
 
 
 @pytest.mark.asyncio
 async def test_application_initialization_is_idempotent(
     security_manager, app_config, mock_providers
 ):
-    app = Organon(config=app_config, security_manager=security_manager)
+    app = Organon(
+        config=app_config,
+        security_manager=security_manager,
+    )
 
     await app.initialize()
     await app.initialize()
 
     assert app._initialized is True
-    mock_providers[0].connect.assert_awaited_once()
+
+    for provider in mock_providers:
+        provider.connect.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_application_close(security_manager, app_config, mock_providers):
-    app = Organon(config=app_config, security_manager=security_manager)
+async def test_application_close(
+    security_manager, app_config, mock_providers
+):
+    app = Organon(
+        config=app_config,
+        security_manager=security_manager,
+    )
 
     await app.initialize()
     await app.close()
@@ -93,11 +126,20 @@ async def test_application_close(security_manager, app_config, mock_providers):
     assert app._initialized is False
     assert app._closed is True
     assert app.engine is None
+    assert app.metadata_store is None
+
+    for provider in mock_providers:
+        provider.close.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_application_close_is_idempotent(security_manager, app_config):
-    app = Organon(config=app_config, security_manager=security_manager)
+async def test_application_close_is_idempotent(
+    security_manager, app_config
+):
+    app = Organon(
+        config=app_config,
+        security_manager=security_manager,
+    )
 
     await app.close()
     await app.close()
@@ -106,8 +148,13 @@ async def test_application_close_is_idempotent(security_manager, app_config):
 
 
 @pytest.mark.asyncio
-async def test_cannot_initialize_after_close(security_manager, app_config):
-    app = Organon(config=app_config, security_manager=security_manager)
+async def test_cannot_initialize_after_close(
+    security_manager, app_config
+):
+    app = Organon(
+        config=app_config,
+        security_manager=security_manager,
+    )
 
     await app.close()
 
@@ -117,15 +164,20 @@ async def test_cannot_initialize_after_close(security_manager, app_config):
 
 @pytest.mark.asyncio
 async def test_cleanup_continues_when_provider_close_fails(
-    security_manager, app_config, monkeypatch
+    security_manager, app_config
 ):
-    app = Organon(config=app_config, security_manager=security_manager)
+    app = Organon(
+        config=app_config,
+        security_manager=security_manager,
+    )
 
     first_provider = MagicMock()
     first_provider.close = AsyncMock()
 
     second_provider = MagicMock()
-    second_provider.close = AsyncMock(side_effect=RuntimeError("Cleanup failed"))
+    second_provider.close = AsyncMock(
+        side_effect=RuntimeError("Cleanup failed")
+    )
 
     app._providers = {
         "first": first_provider,
@@ -135,11 +187,9 @@ async def test_cleanup_continues_when_provider_close_fails(
     with pytest.raises(RuntimeError, match="failed to close"):
         await app.close()
 
-    # Both providers should receive a cleanup attempt.
     first_provider.close.assert_awaited_once()
     second_provider.close.assert_awaited_once()
 
-    # Application should still be marked as closed.
     assert app._closed is True
     assert app._initialized is False
     assert app._providers == {}
@@ -149,12 +199,24 @@ async def test_cleanup_continues_when_provider_close_fails(
 async def test_initialization_failure_cleans_up_providers(
     security_manager, app_config, monkeypatch
 ):
+    metadata_store = MagicMock()
+    metadata_store.connect = AsyncMock()
+    metadata_store.close = AsyncMock()
+
     vector_store = MagicMock()
-    vector_store.connect = AsyncMock(side_effect=RuntimeError("Connection failed"))
+    vector_store.connect = AsyncMock(
+        side_effect=RuntimeError("Connection failed")
+    )
     vector_store.close = AsyncMock()
 
     embedding_provider = MagicMock()
+    embedding_provider.connect = AsyncMock()
     embedding_provider.close = AsyncMock()
+
+    monkeypatch.setattr(
+        "core.application.create_metadata_store",
+        lambda **kwargs: metadata_store,
+    )
 
     monkeypatch.setattr(
         "core.application.create_vector_store",
@@ -166,17 +228,24 @@ async def test_initialization_failure_cleans_up_providers(
         lambda **kwargs: embedding_provider,
     )
 
-    app = Organon(config=app_config, security_manager=security_manager)
+    app = Organon(
+        config=app_config,
+        security_manager=security_manager,
+    )
 
     with pytest.raises(RuntimeError, match="Connection failed"):
         await app.initialize()
 
-    # Both providers should be cleaned up.
+    # Metadata store connected before the vector store failed.
+    metadata_store.connect.assert_awaited_once()
+
+    # Every created provider should receive a cleanup attempt.
+    metadata_store.close.assert_awaited_once()
     vector_store.close.assert_awaited_once()
     embedding_provider.close.assert_awaited_once()
 
-    # Application should not be initialized.
     assert app.engine is None
+    assert app.metadata_store is None
     assert app._initialized is False
     assert app._providers == {}
 
@@ -193,12 +262,20 @@ async def test_application_registers_document_loaders(
 
     await application.initialize()
 
-    providers = application.registry.list_providers("document_loader")
+    providers = application.registry.list_providers(
+        "document_loader"
+    )
 
     assert "text" in providers
 
     chunkers = application.registry.list_providers("chunker")
 
     assert "fixed_size" in chunkers
+
+    metadata_providers = application.registry.list_providers(
+        "metadata_store"
+    )
+
+    assert "postgresql" in metadata_providers
 
     await application.close()

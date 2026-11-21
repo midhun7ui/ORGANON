@@ -32,6 +32,7 @@ def test_provider_config_rejects_invalid_config():
 
 def test_organon_config_valid():
     config = OrganonConfig(
+        metadata_store=ProviderConfig("postgresql", {}),
         vector_store=ProviderConfig("chroma", {}),
         embedding=ProviderConfig("sentence_transformers", {}),
     )
@@ -41,6 +42,7 @@ def test_organon_config_valid():
 
 def test_organon_config_rejects_invalid_provider():
     config = OrganonConfig(
+        metadata_store=ProviderConfig("postgresql", {}),
         vector_store="chroma",
         embedding=ProviderConfig("sentence_transformers", {}),
     )

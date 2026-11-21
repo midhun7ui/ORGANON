@@ -44,15 +44,18 @@ def parse_config(data: dict[str, Any]) -> OrganonConfig:
 
     try:
         # Extract provider configurations.
+        metadata_store_data = data["metadata_store"]
         vector_store_data = data["vector_store"]
         embedding_data = data["embedding"]
 
         # Create provider configuration objects.
+        metadata_store = ProviderConfig(**metadata_store_data)
         vector_store = ProviderConfig(**vector_store_data)
         embedding = ProviderConfig(**embedding_data)
 
         # Create the main application configuration.
         config = OrganonConfig(
+            metadata_store=metadata_store,
             vector_store=vector_store,
             embedding=embedding,
         )

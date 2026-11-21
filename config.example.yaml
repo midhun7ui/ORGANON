@@ -1,5 +1,10 @@
 # ORGANON Configuration
 
+metadata_store:
+  provider: postgresql
+  config:
+    database_url: ${ORGANON_DATABASE_URL}
+
 vector_store:
   provider: chroma
   config:

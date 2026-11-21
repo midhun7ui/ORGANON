@@ -2,16 +2,16 @@ from core.config.loader import resolve_environment_variables
 import pytest
 from core.exceptions import ConfigurationError
 
+
 def test_resolves_environment_variable(monkeypatch):
     monkeypatch.setenv("CHROMA_HOST", "localhost")
 
-    config = {
-        "host": "${CHROMA_HOST}"
-    }
+    config = {"host": "${CHROMA_HOST}"}
 
     resolved = resolve_environment_variables(config)
 
     assert resolved["host"] == "localhost"
+
 
 def test_resolves_nested_environment_variables(monkeypatch):
     monkeypatch.setenv("CHROMA_HOST", "localhost")
@@ -34,23 +34,24 @@ def test_resolves_nested_environment_variables(monkeypatch):
     assert resolved["vector_store"]["config"]["port"] == "8000"
     assert resolved["allowed_hosts"] == ["localhost"]
 
+
 def test_raises_error_for_missing_environment_variable():
     config = {"host": "${MISSING_CHROMA_HOST}"}
 
     with pytest.raises(ConfigurationError, match="MISSING_CHROMA_HOST"):
         resolve_environment_variables(config)
 
+
 def test_resolves_multiple_variables_in_one_string(monkeypatch):
     monkeypatch.setenv("CHROMA_HOST", "localhost")
     monkeypatch.setenv("CHROMA_PORT", "8000")
 
-    config = {
-        "url": "http://${CHROMA_HOST}:${CHROMA_PORT}"
-    }
+    config = {"url": "http://${CHROMA_HOST}:${CHROMA_PORT}"}
 
     resolved = resolve_environment_variables(config)
 
     assert resolved["url"] == "http://localhost:8000"
+
 
 def test_preserves_non_string_values():
     config = {
@@ -65,15 +66,25 @@ def test_preserves_non_string_values():
     assert resolved["enabled"] is True
     assert resolved["optional"] is None
 
+
 from core.config.loader import load_config
 
 
 def test_load_config_resolves_environment_variables(tmp_path, monkeypatch):
     monkeypatch.setenv("CHROMA_HOST", "localhost")
+    monkeypatch.setenv(
+        "ORGANON_DATABASE_URL",
+        "postgresql+asyncpg://localhost/organon",
+    )
 
     config_file = tmp_path / "config.yaml"
     config_file.write_text(
         """
+metadata_store:
+  provider: postgresql
+  config:
+    database_url: ${ORGANON_DATABASE_URL}
+
 vector_store:
   provider: chroma
   config:
@@ -91,5 +102,8 @@ embedding:
 
     config = load_config(config_file)
 
+    assert config.metadata_store.config["database_url"] == (
+        "postgresql+asyncpg://localhost/organon"
+    )
     assert config.vector_store.config["host"] == "localhost"
     assert config.vector_store.config["port"] == 8000
