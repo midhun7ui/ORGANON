@@ -20,7 +20,7 @@ async def test_store_documents_uses_authenticated_tenant():
 
     # Mock the security manager.
     security_manager = AsyncMock()
-    security_manager.authorize.return_value = security_context
+    security_manager.authorize_resources.return_value = security_context
 
     # Mock the vector store.
     vector_store = AsyncMock()
@@ -44,9 +44,11 @@ async def test_store_documents_uses_authenticated_tenant():
     )
 
     # Verify authorization.
-    security_manager.authorize.assert_awaited_once_with(
+    security_manager.authorize_resources.assert_awaited_once_with(
         credentials={"token": "test-token"},
         action="document:write",
+        resource_ids=["doc-001"],
+        resource_type="document",
     )
 
     # Verify document embedding generation.
@@ -69,7 +71,7 @@ async def test_store_documents_rejects_unauthorized_user():
 
     # Mock the security manager to reject the request.
     security_manager = AsyncMock()
-    security_manager.authorize.side_effect = AuthorizationError(
+    security_manager.authorize_resources.side_effect = AuthorizationError(
         "User is not allowed to write documents."
     )
 
@@ -200,7 +202,7 @@ async def test_store_documents_rejects_empty_documents_before_embedding():
     )
 
     security_manager = AsyncMock()
-    security_manager.authorize.return_value = security_context
+    security_manager.authorize_resources.return_value = security_context
 
     vector_store = AsyncMock()
     embedding_provider = AsyncMock()
@@ -272,7 +274,7 @@ async def test_retrieve_documents_rejects_invalid_inputs_before_embedding(
 @pytest.mark.asyncio
 async def test_store_documents_rejects_invalid_metadata_before_embedding():
     security_manager = AsyncMock()
-    security_manager.authorize.return_value = SecurityContext(
+    security_manager.authorize_resources.return_value = SecurityContext(
         user_id="user-1",
         tenant_id="tenant-1",
         permissions=frozenset({"document:write"}),

@@ -11,9 +11,13 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-
 from core.exceptions import ConfigurationError
-from core.config.schema import OrganonConfig, ProviderConfig
+from core.config.schema import (
+    OrganonConfig,
+    ProviderConfig,
+    ObservabilityConfig,
+    ObservabilityProviderConfig,
+)
 
 
 def load_yaml(path: str | Path) -> dict[str, Any]:
@@ -36,6 +40,36 @@ def load_yaml(path: str | Path) -> dict[str, Any]:
     return data
 
 
+def parse_observability_provider(
+    data: Any,
+    *,
+    default_enabled: bool = False,
+    default_provider: str | None = None,
+) -> ObservabilityProviderConfig:
+    """Parse an individual observability provider configuration."""
+
+    if not isinstance(data, dict):
+        raise ValueError("Observability provider configuration must be a dictionary.")
+
+    provider_config = ObservabilityProviderConfig(
+        enabled=default_enabled,
+        provider=default_provider,
+    )
+
+    if "enabled" in data:
+        provider_config.enabled = data["enabled"]
+
+    if "provider" in data:
+        provider_config.provider = data["provider"]
+
+    if "config" in data:
+        provider_config.config = data["config"]
+
+    provider_config.validate()
+
+    return provider_config
+
+
 def parse_config(data: dict[str, Any]) -> OrganonConfig:
     """Convert configuration data into an OrganonConfig object."""
 
@@ -53,11 +87,34 @@ def parse_config(data: dict[str, Any]) -> OrganonConfig:
         vector_store = ProviderConfig(**vector_store_data)
         embedding = ProviderConfig(**embedding_data)
 
+        # Extract observability configuration.
+        observability_data = data.get("observability", {})
+
+        if not isinstance(observability_data, dict):
+            raise ValueError("Observability configuration must be a dictionary.")
+
+        # Create observability configuration.
+        observability = ObservabilityConfig(
+            enabled=observability_data.get("enabled", False),
+            logging=parse_observability_provider(
+                observability_data.get("logging", {}),
+                default_enabled=True,
+                default_provider="standard",
+            ),
+            tracing=parse_observability_provider(
+                observability_data.get("tracing", {}),
+            ),
+            metrics=parse_observability_provider(
+                observability_data.get("metrics", {}),
+            ),
+        )
+
         # Create the main application configuration.
         config = OrganonConfig(
             metadata_store=metadata_store,
             vector_store=vector_store,
             embedding=embedding,
+            observability=observability,
         )
 
         # Validate the complete configuration.

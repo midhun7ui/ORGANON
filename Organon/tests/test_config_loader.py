@@ -156,3 +156,81 @@ embedding:
     assert config.metadata_store.provider == "postgresql"
     assert config.vector_store.provider == "chroma"
     assert config.embedding.provider == "sentence_transformers"
+
+def test_parse_config_without_observability():
+    data = {
+        "metadata_store": {"provider": "postgresql", "config": {}},
+        "vector_store": {"provider": "chroma", "config": {}},
+        "embedding": {"provider": "sentence_transformers", "config": {}},
+    }
+
+    result = parse_config(data)
+
+    assert result.observability.enabled is False
+    assert result.observability.logging.enabled is True
+    assert result.observability.logging.provider == "standard"
+    assert result.observability.tracing.enabled is False
+    assert result.observability.metrics.enabled is False
+
+def test_parse_config_with_observability_enabled():
+    data = {
+        "metadata_store": {"provider": "postgresql", "config": {}},
+        "vector_store": {"provider": "chroma", "config": {}},
+        "embedding": {"provider": "sentence_transformers", "config": {}},
+        "observability": {
+            "enabled": True,
+        },
+    }
+
+    result = parse_config(data)
+
+    assert result.observability.enabled is True
+    assert result.observability.logging.enabled is True
+    assert result.observability.logging.provider == "standard"
+
+def test_parse_config_with_custom_observability_providers():
+    data = {
+        "metadata_store": {"provider": "postgresql", "config": {}},
+        "vector_store": {"provider": "chroma", "config": {}},
+        "embedding": {"provider": "sentence_transformers", "config": {}},
+        "observability": {
+            "enabled": True,
+            "logging": {
+                "enabled": True,
+                "provider": "custom_logger",
+                "config": {"level": "DEBUG"},
+            },
+            "tracing": {
+                "enabled": True,
+                "provider": "opentelemetry",
+                "config": {"endpoint": "localhost:4317"},
+            },
+            "metrics": {
+                "enabled": True,
+                "provider": "prometheus",
+                "config": {"port": 9090},
+            },
+        },
+    }
+
+    result = parse_config(data)
+
+    assert result.observability.logging.provider == "custom_logger"
+    assert result.observability.logging.config["level"] == "DEBUG"
+
+    assert result.observability.tracing.enabled is True
+    assert result.observability.tracing.provider == "opentelemetry"
+
+    assert result.observability.metrics.enabled is True
+    assert result.observability.metrics.provider == "prometheus"
+
+def test_parse_config_rejects_invalid_observability():
+    data = {
+        "metadata_store": {"provider": "postgresql", "config": {}},
+        "vector_store": {"provider": "chroma", "config": {}},
+        "embedding": {"provider": "sentence_transformers", "config": {}},
+        "observability": "invalid",
+    }
+
+    with pytest.raises(ConfigurationError):
+        parse_config(data)

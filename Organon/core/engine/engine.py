@@ -129,26 +129,27 @@ class OrganonEngine:
         documents: list[str],
         metadatas: list[dict[str, Any]] | None = None,
     ) -> None:
-        """Authenticate, authorize, and store documents securely."""
+        """Authorize, validate, embed, and securely store documents."""
 
-        # Authenticate the requester and verify document write permission.
-        security_context = await self.security_manager.authorize(
-            credentials=credentials,
-            action="document:write",
-        )
-
-        # Validate inputs before generating embeddings.
+        # Validate inputs before performing security checks.
         validate_document_inputs(
             ids=ids,
             documents=documents,
             metadatas=metadatas,
         )
 
-        # Generate embeddings for the documents.
+        # Authenticate and authorize access to every document.
+        security_context = await self.security_manager.authorize_resources(
+            credentials=credentials,
+            action="document:write",
+            resource_ids=ids,
+            resource_type="document",
+        )
+
+        # Generate embeddings only after authorization succeeds.
         vectors = await self.embedding_provider.embed_documents(documents)
 
-        # Use the trusted tenant ID from the security context.
-        # Never accept tenant_id directly from the requester.
+        # Store documents within the authenticated user's tenant.
         await self.vector_store.upsert(
             ids=ids,
             vectors=vectors,
@@ -191,4 +192,3 @@ class OrganonEngine:
         )
 
         return results
-
