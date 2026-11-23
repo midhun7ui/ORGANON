@@ -33,6 +33,14 @@ from core.embeddings.registration import (
 from core.documents.registration import register_document_loaders
 from core.chunking.registration import register_chunkers
 
+from core.observability.manager import ObservabilityManager
+from core.observability.logging.providers.register import (
+    register_logging_providers,
+)
+from core.observability.tracing.providers.register import (
+    register_tracing_providers,
+)
+
 
 class Organon:
     """Main application manager for ORGANON."""
@@ -52,6 +60,9 @@ class Organon:
 
         # Metadata store will be created during initialization.
         self.metadata_store: MetadataStore | None = None
+
+        # Observability manager will be initialized with the application.
+        self.observability_manager: ObservabilityManager | None = None
 
         # Track application lifecycle.
         self._initialized = False
@@ -99,7 +110,7 @@ class Organon:
         # Prevent initialization after shutdown.
         if self._closed:
             raise RuntimeError(
-                "Cannot initialize a closed ORGANON application"
+                "Cannot initialize a closed ORGANON application."
             )
 
         try:
@@ -111,6 +122,10 @@ class Organon:
             # Register document loaders and chunkers.
             register_document_loaders(self.registry)
             register_chunkers(self.registry)
+
+            # Register logging and tracing providers.
+            register_logging_providers(self.registry)
+            register_tracing_providers(self.registry)
 
             # Read provider configurations.
             metadata_store_config = self.config.metadata_store
@@ -154,11 +169,32 @@ class Organon:
             # Initialize the embedding provider.
             await embedding_provider.connect()
 
+            # Create the observability manager.
+            observability_manager = ObservabilityManager(
+                config=self.config.observability,
+                registry=self.registry,
+            )
+
+            # Track it before initialization so application cleanup
+            # can manage it if initialization fails.
+            self._providers["observability"] = observability_manager
+
+            # Initialize configured observability providers.
+            await observability_manager.initialize()
+
+            self.observability_manager = observability_manager
+
+            # Retrieve configured observability providers.
+            logger = observability_manager.logger
+            tracer = observability_manager.tracer
+
             # Create the main ORGANON engine.
             self.engine = OrganonEngine(
                 security_manager=self.security_manager,
                 vector_store=vector_store,
                 embedding_provider=embedding_provider,
+                logger=logger,
+                tracer=tracer,
             )
 
             # Mark application as initialized.
@@ -168,6 +204,7 @@ class Organon:
             # Reset application component references.
             self.engine = None
             self.metadata_store = None
+            self.observability_manager = None
 
             # Attempt cleanup of all created providers.
             cleanup_errors = await self._cleanup_providers()
@@ -191,6 +228,7 @@ class Organon:
         # Release application component references.
         self.engine = None
         self.metadata_store = None
+        self.observability_manager = None
 
         # Attempt to clean up all initialized providers.
         cleanup_errors = await self._cleanup_providers()

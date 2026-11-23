@@ -1,4 +1,3 @@
-
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -6,7 +5,7 @@ import pytest
 from core.application import Organon
 from core.security.manager import SecurityManager
 from core.config.schema import OrganonConfig, ProviderConfig
-
+from core.observability.tracing.providers.standard import StandardTracer
 
 @pytest.fixture
 def security_manager():
@@ -73,9 +72,7 @@ def mock_providers(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_application_initialization(
-    security_manager, app_config, mock_providers
-):
+async def test_application_initialization(security_manager, app_config, mock_providers):
     app = Organon(
         config=app_config,
         security_manager=security_manager,
@@ -112,9 +109,7 @@ async def test_application_initialization_is_idempotent(
 
 
 @pytest.mark.asyncio
-async def test_application_close(
-    security_manager, app_config, mock_providers
-):
+async def test_application_close(security_manager, app_config, mock_providers):
     app = Organon(
         config=app_config,
         security_manager=security_manager,
@@ -133,9 +128,7 @@ async def test_application_close(
 
 
 @pytest.mark.asyncio
-async def test_application_close_is_idempotent(
-    security_manager, app_config
-):
+async def test_application_close_is_idempotent(security_manager, app_config):
     app = Organon(
         config=app_config,
         security_manager=security_manager,
@@ -148,9 +141,7 @@ async def test_application_close_is_idempotent(
 
 
 @pytest.mark.asyncio
-async def test_cannot_initialize_after_close(
-    security_manager, app_config
-):
+async def test_cannot_initialize_after_close(security_manager, app_config):
     app = Organon(
         config=app_config,
         security_manager=security_manager,
@@ -175,9 +166,7 @@ async def test_cleanup_continues_when_provider_close_fails(
     first_provider.close = AsyncMock()
 
     second_provider = MagicMock()
-    second_provider.close = AsyncMock(
-        side_effect=RuntimeError("Cleanup failed")
-    )
+    second_provider.close = AsyncMock(side_effect=RuntimeError("Cleanup failed"))
 
     app._providers = {
         "first": first_provider,
@@ -204,9 +193,7 @@ async def test_initialization_failure_cleans_up_providers(
     metadata_store.close = AsyncMock()
 
     vector_store = MagicMock()
-    vector_store.connect = AsyncMock(
-        side_effect=RuntimeError("Connection failed")
-    )
+    vector_store.connect = AsyncMock(side_effect=RuntimeError("Connection failed"))
     vector_store.close = AsyncMock()
 
     embedding_provider = MagicMock()
@@ -262,9 +249,7 @@ async def test_application_registers_document_loaders(
 
     await application.initialize()
 
-    providers = application.registry.list_providers(
-        "document_loader"
-    )
+    providers = application.registry.list_providers("document_loader")
 
     assert "text" in providers
 
@@ -272,10 +257,37 @@ async def test_application_registers_document_loaders(
 
     assert "fixed_size" in chunkers
 
-    metadata_providers = application.registry.list_providers(
-        "metadata_store"
-    )
+    metadata_providers = application.registry.list_providers("metadata_store")
 
     assert "postgresql" in metadata_providers
 
+    tracing_providers = application.registry.list_providers("tracing")
+
+    assert "standard" in tracing_providers
+
     await application.close()
+
+@pytest.mark.asyncio
+async def test_application_initializes_tracing_provider(
+    security_manager,
+    app_config,
+    mock_providers,
+):
+    app_config.observability.enabled = True
+    app_config.observability.tracing.enabled = True
+    app_config.observability.tracing.provider = "standard"
+
+    app = Organon(
+        config=app_config,
+        security_manager=security_manager,
+    )
+
+    await app.initialize()
+
+    assert app.observability_manager is not None
+    assert isinstance(
+        app.observability_manager.tracer,
+        StandardTracer,
+    )
+
+    await app.close()

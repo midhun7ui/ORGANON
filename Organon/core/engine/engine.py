@@ -1,7 +1,19 @@
+
+"""
+ORGANON - Main Engine
+
+Coordinates document ingestion, retrieval, security,
+provider lifecycle, logging, and distributed tracing.
+"""
+
 import asyncio
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Any
 
 from core.embeddings.base import EmbeddingProvider
+from core.observability.logging.base import Logger
+from core.observability.tracing.base import Span, Tracer
 from core.security.manager import SecurityManager
 from core.validation import validate_document_inputs, validate_query_input
 from core.vectorstores.base import VectorStore, VectorSearchResult
@@ -15,10 +27,14 @@ class OrganonEngine:
         security_manager: SecurityManager,
         vector_store: VectorStore,
         embedding_provider: EmbeddingProvider,
+        logger: Logger | None = None,
+        tracer: Tracer | None = None,
     ) -> None:
         self.security_manager = security_manager
         self.vector_store = vector_store
         self.embedding_provider = embedding_provider
+        self.logger = logger
+        self.tracer = tracer
 
         # Track the engine's connection state.
         self._is_connected = False
@@ -28,6 +44,81 @@ class OrganonEngine:
 
         # Prevent concurrent lifecycle operations.
         self._lifecycle_lock = asyncio.Lock()
+
+    def _log(
+        self,
+        level: str,
+        message: str,
+        *,
+        context: dict[str, Any] | None = None,
+    ) -> None:
+        """Write a log message without interrupting core operations."""
+
+        if self.logger is None:
+            return
+
+        try:
+            log_method = getattr(self.logger, level)
+            log_method(message, context=context)
+
+        except Exception:
+            # Observability failures must not interrupt core operations.
+            pass
+
+    @contextmanager
+    def _trace(
+        self,
+        name: str,
+        *,
+        attributes: dict[str, Any] | None = None,
+    ) -> Iterator[Span | None]:
+        """Create a tracing span without interrupting core operations."""
+
+        # Continue normally when tracing is disabled.
+        if self.tracer is None:
+            yield None
+            return
+
+        # Attempt to create and activate the tracing context.
+        try:
+            span_context = self.tracer.start_as_current_span(
+                name,
+                attributes=attributes,
+            )
+
+            span = span_context.__enter__()
+
+        except Exception:
+            # Tracing initialization must not break core operations.
+            yield None
+            return
+
+        try:
+            yield span
+
+        except BaseException as operation_error:
+            # Notify the tracing provider about the operation failure.
+            try:
+                span_context.__exit__(
+                    type(operation_error),
+                    operation_error,
+                    operation_error.__traceback__,
+                )
+
+            except Exception:
+                # Preserve the original operation exception.
+                pass
+
+            raise
+
+        else:
+            # Finish the span after successful execution.
+            try:
+                span_context.__exit__(None, None, None)
+
+            except Exception:
+                # Ignore tracing cleanup failures.
+                pass
 
     async def connect(self) -> None:
         """Initialize all providers required by the engine."""
@@ -78,7 +169,9 @@ class OrganonEngine:
                         self._providers_to_close.append(provider)
 
                         # Preserve the original startup exception.
-                        exc.add_note(f"Provider cleanup failed: {cleanup_error}")
+                        exc.add_note(
+                            f"Provider cleanup failed: {cleanup_error}"
+                        )
 
                 self._is_connected = False
 
@@ -118,7 +211,9 @@ class OrganonEngine:
                 first_error = errors[0]
 
                 for error in errors[1:]:
-                    first_error.add_note(f"Additional cleanup failure: {error}")
+                    first_error.add_note(
+                        f"Additional cleanup failure: {error}"
+                    )
 
                 raise first_error
 
@@ -131,32 +226,72 @@ class OrganonEngine:
     ) -> None:
         """Authorize, validate, embed, and securely store documents."""
 
-        # Validate inputs before performing security checks.
-        validate_document_inputs(
-            ids=ids,
-            documents=documents,
-            metadatas=metadatas,
+        self._log(
+            "info",
+            "Document ingestion started.",
+            context={
+                "event": "document_ingestion.started",
+                "document_count": len(documents),
+            },
         )
 
-        # Authenticate and authorize access to every document.
-        security_context = await self.security_manager.authorize_resources(
-            credentials=credentials,
-            action="document:write",
-            resource_ids=ids,
-            resource_type="document",
-        )
+        try:
+            # Trace the complete document ingestion operation.
+            with self._trace(
+                "document_ingestion",
+                attributes={
+                    "document_count": len(documents),
+                },
+            ):
+                # Validate inputs before performing security checks.
+                validate_document_inputs(
+                    ids=ids,
+                    documents=documents,
+                    metadatas=metadatas,
+                )
 
-        # Generate embeddings only after authorization succeeds.
-        vectors = await self.embedding_provider.embed_documents(documents)
+                # Authenticate and authorize access to every document.
+                security_context = await self.security_manager.authorize_resources(
+                    credentials=credentials,
+                    action="document:write",
+                    resource_ids=ids,
+                    resource_type="document",
+                )
 
-        # Store documents within the authenticated user's tenant.
-        await self.vector_store.upsert(
-            ids=ids,
-            vectors=vectors,
-            documents=documents,
-            metadatas=metadatas,
-            tenant_id=security_context.tenant_id,
-        )
+                # Generate embeddings only after authorization succeeds.
+                vectors = await self.embedding_provider.embed_documents(
+                    documents
+                )
+
+                # Store documents within the authenticated user's tenant.
+                await self.vector_store.upsert(
+                    ids=ids,
+                    vectors=vectors,
+                    documents=documents,
+                    metadatas=metadatas,
+                    tenant_id=security_context.tenant_id,
+                )
+
+            self._log(
+                "info",
+                "Document ingestion completed.",
+                context={
+                    "event": "document_ingestion.completed",
+                    "document_count": len(documents),
+                },
+            )
+
+        except Exception:
+            self._log(
+                "error",
+                "Document ingestion failed.",
+                context={
+                    "event": "document_ingestion.failed",
+                    "document_count": len(documents),
+                },
+            )
+
+            raise
 
     async def retrieve_documents(
         self,
@@ -167,28 +302,69 @@ class OrganonEngine:
     ) -> list[VectorSearchResult]:
         """Authenticate, authorize, and retrieve documents securely."""
 
-        # Authenticate the requester and verify read permission.
-        security_context = await self.security_manager.authorize(
-            credentials=credentials,
-            action="document:read",
+        self._log(
+            "info",
+            "Document retrieval started.",
+            context={
+                "event": "document_retrieval.started",
+                "top_k": top_k,
+            },
         )
 
-        # Validate inputs before generating embeddings.
-        validate_query_input(
-            query=query,
-            top_k=top_k,
-            filters=filters,
-        )
+        try:
+            # Trace the complete retrieval request lifecycle.
+            with self._trace(
+                "document_retrieval",
+                attributes={
+                    "top_k": top_k,
+                },
+            ):
+                # Authenticate the requester and verify read permission.
+                security_context = await self.security_manager.authorize(
+                    credentials=credentials,
+                    action="document:read",
+                )
 
-        # Generate an embedding for the user's query.
-        query_vector = await self.embedding_provider.embed_query(query)
+                # Validate inputs before generating embeddings.
+                validate_query_input(
+                    query=query,
+                    top_k=top_k,
+                    filters=filters,
+                )
 
-        # Search only within the authenticated user's tenant.
-        results = await self.vector_store.search(
-            query_vector=query_vector,
-            top_k=top_k,
-            filters=filters,
-            tenant_id=security_context.tenant_id,
-        )
+                # Generate an embedding for the user's query.
+                query_vector = await self.embedding_provider.embed_query(
+                    query
+                )
 
-        return results
+                # Search only within the authenticated user's tenant.
+                results = await self.vector_store.search(
+                    query_vector=query_vector,
+                    top_k=top_k,
+                    filters=filters,
+                    tenant_id=security_context.tenant_id,
+                )
+
+            self._log(
+                "info",
+                "Document retrieval completed.",
+                context={
+                    "event": "document_retrieval.completed",
+                    "top_k": top_k,
+                    "result_count": len(results),
+                },
+            )
+
+            return results
+
+        except Exception:
+            self._log(
+                "error",
+                "Document retrieval failed.",
+                context={
+                    "event": "document_retrieval.failed",
+                    "top_k": top_k,
+                },
+            )
+
+            raise
